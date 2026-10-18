@@ -1,0 +1,28 @@
+# Nombre fijo del proyecto: si no, Compose lo saca del directorio y el volumen
+# acaba llamandose distinto en cada maquina.
+name: dashboard-connector
+
+services:
+  hub:
+    build: ./hub
+    # Si prefieres no construir, publica la imagen en tu registro y usa:
+    # image: tu-registro/dashboard-connector-hub:1.0.0
+    container_name: dashboard-connector-hub
+    restart: unless-stopped
+    environment:
+      DC_AGENT_TOKEN: ${DC_AGENT_TOKEN:?falta DC_AGENT_TOKEN}
+      DC_ADMIN_TOKEN: ${DC_ADMIN_TOKEN:?falta DC_ADMIN_TOKEN}
+      DC_POLL_INTERVAL: ${DC_POLL_INTERVAL:-20}
+      DC_DB_PATH: /data/hub.db
+    volumes:
+      - hub-data:/data
+    ports:
+      - "${DC_BIND:-0.0.0.0}:8700:8700"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8700/healthz').read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  hub-data:

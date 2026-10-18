@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard Connector</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1: #fcfcfb;
+    --plane: #f9f9f7;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --baseline: #c3c2b7;
+    --border: rgba(11,11,11,0.10);
+    --good: #0ca30c;
+    --warning: #fab219;
+    --serious: #ec835a;
+    --critical: #d03b3b;
+    --accent: #2a78d6;
+    --track: #ebeae4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-1: #1a1a19;
+      --plane: #0d0d0d;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --muted: #898781;
+      --grid: #2c2c2a;
+      --baseline: #383835;
+      --border: rgba(255,255,255,0.10);
+      --accent: #3987e5;
+      --track: #2c2c2a;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --plane: #0d0d0d;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --muted: #898781;
+    --grid: #2c2c2a;
+    --baseline: #383835;
+    --border: rgba(255,255,255,0.10);
+    --accent: #3987e5;
+    --track: #2c2c2a;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px;
+    background: var(--plane); color: var(--text-primary);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+  h1 { font-size: 20px; margin: 0; font-weight: 600; }
+  .sub { color: var(--text-secondary); font-size: 13px; }
+  .spacer { flex: 1; }
+  button, select {
+    font: inherit; color: var(--text-primary); background: var(--surface-1);
+    border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; cursor: pointer;
+  }
+  button:hover, select:hover { border-color: var(--baseline); }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .tile .label { color: var(--text-secondary); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  .tile .value { font-size: 30px; font-weight: 600; line-height: 1.15; margin-top: 4px; }
+  .tile .unit { font-size: 14px; color: var(--text-secondary); font-weight: 400; margin-left: 3px; }
+
+  .wrap { overflow-x: auto; background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; min-width: 900px; }
+  th { text-align: left; font-size: 12px; font-weight: 600; color: var(--text-secondary);
+       padding: 10px 12px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+  td { padding: 10px 12px; border-bottom: 1px solid var(--grid); vertical-align: middle; }
+  tr:last-child td { border-bottom: 0; }
+  .num { font-variant-numeric: tabular-nums; }
+  .host { font-weight: 600; }
+  .dim { color: var(--muted); font-size: 12px; }
+
+  .chip { display: inline-flex; align-items: center; gap: 5px; font-size: 12px;
+          border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px; white-space: nowrap; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+
+  .meter { display: flex; align-items: center; gap: 8px; }
+  .track { position: relative; flex: 1; min-width: 70px; height: 8px; background: var(--track); border-radius: 4px; overflow: hidden; }
+  .fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; }
+  .meter .num { font-size: 12px; color: var(--text-secondary); min-width: 44px; text-align: right; }
+
+  .events { margin-top: 20px; font-size: 13px; color: var(--text-secondary); }
+  .events h2 { font-size: 13px; color: var(--text-primary); margin: 0 0 8px; }
+  .events li { margin-bottom: 2px; font-variant-numeric: tabular-nums; }
+  .err { color: var(--critical); margin-bottom: 12px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Dashboard Connector</h1>
+  <span class="sub" id="meta">cargando…</span>
+  <span class="spacer"></span>
+  <button id="theme">Tema</button>
+  <button id="retoken">Cambiar token</button>
+</header>
+
+<div class="err" id="err" hidden></div>
+
+<section class="tiles" id="tiles"></section>
+
+<div class="wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Equipo</th><th>Estado</th><th>Modo</th><th>CPU</th><th>RAM</th>
+        <th>Ofrece</th><th>Sistema</th><th>Extras</th><th>Cambiar a</th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+</div>
+
+<div class="events">
+  <h2>Últimos movimientos</h2>
+  <ul id="events"></ul>
+</div>
+
+<script>
+const MODES = {
+  off:          { label: "Fuera",            icon: "○", color: "var(--muted)" },
+  receive_only: { label: "Solo recibe",      icon: "▼", color: "var(--accent)" },
+  send_only:    { label: "Solo envía",       icon: "▲", color: "var(--serious)" },
+  full:         { label: "Envía y recibe",   icon: "⇅", color: "var(--good)" },
+};
+
+function token() {
+  let t = localStorage.getItem("dc_admin_token");
+  if (!t) {
+    t = prompt("Token de administración del hub:") || "";
+    if (t) localStorage.setItem("dc_admin_token", t);
+  }
+  return t;
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    ...opts,
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token() },
+  });
+  if (res.status === 401) {
+    localStorage.removeItem("dc_admin_token");
+    throw new Error("Token inválido. Recarga la página e introdúcelo de nuevo.");
+  }
+  if (!res.ok) throw new Error("El hub respondió " + res.status);
+  return res.json();
+}
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+}
+
+// Un medidor de uso: el color pasa a aviso/crítico solo por encima de umbral,
+// y el porcentaje va siempre escrito al lado (nunca solo el color).
+function meter(pct) {
+  if (pct === null || pct === undefined) return '<span class="dim">s/d</span>';
+  const p = Math.max(0, Math.min(100, pct));
+  const color = p >= 90 ? "var(--critical)" : p >= 75 ? "var(--warning)" : "var(--accent)";
+  return `<div class="meter">
+            <div class="track"><div class="fill" style="width:${p}%;background:${color}"></div></div>
+            <span class="num">${p.toFixed(0)}%</span>
+          </div>`;
+}
+
+function ago(s) {
+  if (s === null || s === undefined) return "nunca";
+  if (s < 60) return s + " s";
+  if (s < 3600) return Math.floor(s / 60) + " min";
+  return Math.floor(s / 3600) + " h";
+}
+
+function render(data) {
+  const p = data.pool;
+  document.getElementById("meta").textContent =
+    `${p.nodes_online}/${p.nodes_total} equipos en línea · latido cada ${p.poll_interval}s · ${new Date().toLocaleTimeString()}`;
+
+  document.getElementById("tiles").innerHTML = [
+    ["Equipos conectados", p.nodes_online, "de " + p.nodes_total],
+    ["Compartiendo ahora", p.nodes_sharing, "equipos"],
+    ["CPU disponible", p.cores_offered, "núcleos"],
+    ["RAM disponible", p.ram_offered_gb, "GB"],
+  ].map(([l, v, u]) => `<div class="tile"><div class="label">${l}</div>
+       <div class="value num">${v}<span class="unit">${u}</span></div></div>`).join("");
+
+  document.getElementById("rows").innerHTML = data.nodes.map(n => {
+    const m = MODES[n.applied_mode] || MODES.off;
+    const want = MODES[n.desired_mode] || MODES.off;
+    const pending = n.desired_mode !== n.applied_mode;
+    const ramPct = n.ram_total_mb ? (n.ram_used_mb / n.ram_total_mb) * 100 : null;
+    const estado = n.online
+      ? `<span class="chip"><span class="dot" style="background:var(--good)"></span>✓ En línea</span>`
+      : `<span class="chip"><span class="dot" style="background:var(--critical)"></span>✕ Caído · ${ago(n.seen_ago)}</span>`;
+    const extras = [n.gpu ? "GPU: " + esc(n.gpu) : "", n.docker ? "Docker " + esc(n.docker) : ""]
+      .filter(Boolean).join("<br>") || '<span class="dim">—</span>';
+
+    return `<tr>
+      <td><div class="host">${esc(n.hostname || n.node_id)}</div><div class="dim num">${esc(n.ip || "")}</div></td>
+      <td>${estado}</td>
+      <td><span class="chip"><span style="color:${m.color}">${m.icon}</span> ${m.label}</span>
+          ${pending ? `<div class="dim">→ pedido: ${want.label}</div>` : ""}</td>
+      <td style="min-width:130px">${meter(n.cpu_pct)}<div class="dim num">${n.cpu_cores || "?"} núcleos</div></td>
+      <td style="min-width:130px">${meter(ramPct)}<div class="dim num">${(n.ram_total_mb/1024).toFixed(1)} GB</div></td>
+      <td class="num">${n.sharing ? `${n.offer_cores} núcleos<br>${(n.offer_ram_mb/1024).toFixed(1)} GB` : '<span class="dim">nada</span>'}</td>
+      <td class="dim">${esc(n.os_detail || n.os)}</td>
+      <td class="dim">${extras}</td>
+      <td>
+        <select data-node="${esc(n.node_id)}">
+          ${Object.entries(MODES).map(([k, v]) =>
+            `<option value="${k}" ${k === n.desired_mode ? "selected" : ""}>${v.icon} ${v.label}</option>`).join("")}
+        </select>
+      </td>
+    </tr>`;
+  }).join("") || `<tr><td colspan="9" class="dim">Todavía no se ha conectado ningún equipo.</td></tr>`;
+
+  document.getElementById("events").innerHTML = data.events.map(e =>
+    `<li>${new Date(e.ts * 1000).toLocaleString()} · <b>${esc(e.node_id)}</b> · ${esc(e.kind)} ${esc(e.detail)}</li>`
+  ).join("");
+
+  document.querySelectorAll("select[data-node]").forEach(sel => {
+    sel.onchange = async () => {
+      try {
+        await api(`/api/v1/nodes/${encodeURIComponent(sel.dataset.node)}/mode`,
+                  { method: "POST", body: JSON.stringify({ mode: sel.value }) });
+        tick();
+      } catch (e) { showError(e.message); }
+    };
+  });
+}
+
+function showError(msg) {
+  const el = document.getElementById("err");
+  el.textContent = msg; el.hidden = false;
+}
+
+async function tick() {
+  try {
+    const data = await api("/api/v1/nodes");
+    document.getElementById("err").hidden = true;
+    render(data);
+  } catch (e) { showError(e.message); }
+}
+
+document.getElementById("theme").onclick = () => {
+  const cur = document.documentElement.getAttribute("data-theme");
+  const next = cur === "dark" ? "light" : cur === "light" ? "" : "dark";
+  if (next) document.documentElement.setAttribute("data-theme", next);
+  else document.documentElement.removeAttribute("data-theme");
+  localStorage.setItem("dc_theme", next);
+};
+document.getElementById("retoken").onclick = () => {
+  localStorage.removeItem("dc_admin_token"); location.reload();
+};
+const savedTheme = localStorage.getItem("dc_theme");
+if (savedTheme) document.documentElement.setAttribute("data-theme", savedTheme);
+
+tick();
+setInterval(tick, 5000);
+</script>
+</body>
+</html>
