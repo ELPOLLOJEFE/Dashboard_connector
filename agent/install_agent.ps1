@@ -14,6 +14,7 @@ param(
   [int]$Interval = 20,
   [int]$ShareCpuPct = 50,
   [int]$ShareRamMb = 2048,
+  [int]$ShareFreePct = 0,
   [string]$WorkerUnit = ""
 )
 
@@ -51,6 +52,7 @@ set DC_NODE_ID=$NodeId
 set DC_INTERVAL=$Interval
 set DC_SHARE_CPU_PCT=$ShareCpuPct
 set DC_SHARE_RAM_MB=$ShareRamMb
+set DC_SHARE_FREE_PCT=$ShareFreePct
 set DC_WORKER_UNIT=$WorkerUnit
 set DC_STATE_DIR=$state
 "$pyExe" "$dest\dc_agent.py" >> "$state\agent.log" 2>&1
