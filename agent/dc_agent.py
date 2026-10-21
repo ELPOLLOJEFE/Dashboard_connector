@@ -34,6 +34,8 @@ NODE_ID = os.environ.get("DC_NODE_ID") or socket.gethostname().lower()
 INTERVAL = int(os.environ.get("DC_INTERVAL", "20"))
 SHARE_CPU_PCT = int(os.environ.get("DC_SHARE_CPU_PCT", "50"))
 SHARE_RAM_MB = int(os.environ.get("DC_SHARE_RAM_MB", "2048"))
+# Si > 0, ignora los dos anteriores y cede ese % de lo que este libre en cada latido.
+SHARE_FREE_PCT = int(os.environ.get("DC_SHARE_FREE_PCT", "0"))
 STATE_DIR = os.environ.get("DC_STATE_DIR") or (
     r"C:\ProgramData\dashboard-connector" if os.name == "nt" else "/var/lib/dashboard-connector"
 )
@@ -48,40 +50,68 @@ try:
 except ImportError:
     psutil = None
 
+if IS_WIN:
+    import ctypes
+
+    class MEMORYSTATUSEX(ctypes.Structure):
+        _fields_ = [
+            ("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+            ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+            ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+            ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+            ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+        ]
+
+_STATIC_TTL = 600  # segundos entre refresco de valores que casi no cambian
+_static_cache: dict = {}
+
 
 def log(msg):
     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}", flush=True)
 
 
+def _cached(key, fn):
+    """Devuelve el valor cacheado si no ha expirado, si no lo recalcula."""
+    entry = _static_cache.get(key)
+    if entry and (time.time() - entry[0]) < _STATIC_TTL:
+        return entry[1]
+    val = fn()
+    _static_cache[key] = (time.time(), val)
+    return val
+
+
 # ---------------------------------------------------------------- metricas
 
-_prev_cpu = {}
+_prev_cpu_stat = None  # (total, idle) de la ultima lectura de /proc/stat
 
 
 def cpu_percent():
+    global _prev_cpu_stat
     if psutil:
-        return round(psutil.cpu_percent(interval=1.0), 1)
+        return round(psutil.cpu_percent(interval=None), 1)
     if not IS_WIN:
         try:
-            def read():
-                with open("/proc/stat") as f:
-                    parts = f.readline().split()[1:]
-                vals = [int(v) for v in parts]
-                idle = vals[3] + (vals[4] if len(vals) > 4 else 0)
-                return sum(vals), idle
-
-            t1, i1 = read()
-            time.sleep(1.0)
-            t2, i2 = read()
-            dt, di = t2 - t1, i2 - i1
-            return round(100.0 * (dt - di) / dt, 1) if dt > 0 else None
+            with open("/proc/stat") as f:
+                parts = f.readline().split()[1:]
+            vals = [int(v) for v in parts]
+            idle = vals[3] + (vals[4] if len(vals) > 4 else 0)
+            total = sum(vals)
+            if _prev_cpu_stat is not None:
+                t1, i1 = _prev_cpu_stat
+                dt, di = total - t1, idle - i1
+                result = round(100.0 * (dt - di) / dt, 1) if dt > 0 else None
+            else:
+                result = None
+            _prev_cpu_stat = (total, idle)
+            return result
         except Exception:
+            _prev_cpu_stat = None
             return None
     return None  # en Windows sin psutil no estimamos CPU
 
 
 def cpu_cores():
-    return os.cpu_count() or 0
+    return _cached("cpu_cores", lambda: os.cpu_count() or 0)
 
 
 def mem_mb():
@@ -90,17 +120,6 @@ def mem_mb():
         m = psutil.virtual_memory()
         return int(m.total / 1048576), int((m.total - m.available) / 1048576)
     if IS_WIN:
-        import ctypes
-
-        class MEMORYSTATUSEX(ctypes.Structure):
-            _fields_ = [
-                ("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
-                ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
-                ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
-                ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
-                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
-            ]
-
         st = MEMORYSTATUSEX()
         st.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
         ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st))
@@ -137,34 +156,40 @@ def run(cmd):
 
 
 def detect_docker():
-    if not shutil.which("docker"):
-        return ""
-    ver = run(["docker", "version", "--format", "{{.Server.Version}}"])
-    if not ver:
-        return "instalado (sin acceso al demonio)"
-    swarm = run(["docker", "info", "--format", "{{.Swarm.LocalNodeState}}"])
-    return f"{ver}" + (f" / swarm:{swarm}" if swarm and swarm != "inactive" else "")
+    def _detect():
+        if not shutil.which("docker"):
+            return ""
+        ver = run(["docker", "version", "--format", "{{.Server.Version}}"])
+        if not ver:
+            return "instalado (sin acceso al demonio)"
+        swarm = run(["docker", "info", "--format", "{{.Swarm.LocalNodeState}}"])
+        return f"{ver}" + (f" / swarm:{swarm}" if swarm and swarm != "inactive" else "")
+    return _cached("docker", _detect)
 
 
 def detect_gpu():
-    if not shutil.which("nvidia-smi"):
-        return ""
-    out = run(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"])
-    return out.splitlines()[0].strip() if out else ""
+    def _detect():
+        if not shutil.which("nvidia-smi"):
+            return ""
+        out = run(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"])
+        return out.splitlines()[0].strip() if out else ""
+    return _cached("gpu", _detect)
 
 
 def os_detail():
-    if IS_WIN:
-        return f"{platform.system()} {platform.release()} {platform.version()}"
-    try:
-        pretty = ""
-        with open("/etc/os-release") as f:
-            for line in f:
-                if line.startswith("PRETTY_NAME="):
-                    pretty = line.split("=", 1)[1].strip().strip('"')
-        return pretty or platform.platform()
-    except Exception:
-        return platform.platform()
+    def _detect():
+        if IS_WIN:
+            return f"{platform.system()} {platform.release()} {platform.version()}"
+        try:
+            pretty = ""
+            with open("/etc/os-release") as f:
+                for line in f:
+                    if line.startswith("PRETTY_NAME="):
+                        pretty = line.split("=", 1)[1].strip().strip('"')
+            return pretty or platform.platform()
+        except Exception:
+            return platform.platform()
+    return _cached("os_detail", _detect)
 
 
 # ------------------------------------------------------------ aplicar modo
@@ -245,13 +270,21 @@ def main():
         try:
             total_mb, used_mb = mem_mb()
             dtotal, dused = disk_gb()
+            cpu_pct = cpu_percent()
+            if SHARE_FREE_PCT > 0:
+                free_cpu = max(0.0, 100.0 - (cpu_pct or 0.0))
+                dyn_cpu = round(SHARE_FREE_PCT * free_cpu / 100)
+                dyn_ram = int(SHARE_FREE_PCT * max(0, total_mb - used_mb) / 100)
+            else:
+                dyn_cpu = SHARE_CPU_PCT
+                dyn_ram = SHARE_RAM_MB
             payload = {
                 "node_id": NODE_ID,
                 "hostname": socket.gethostname(),
                 "os": platform.system(),
                 "os_detail": os_detail(),
                 "cpu_cores": cpu_cores(),
-                "cpu_pct": cpu_percent(),
+                "cpu_pct": cpu_pct,
                 "ram_total_mb": total_mb,
                 "ram_used_mb": used_mb,
                 "disk_total_gb": dtotal,
@@ -259,8 +292,8 @@ def main():
                 "gpu": detect_gpu(),
                 "docker": detect_docker(),
                 "agent_version": VERSION,
-                "share_cpu_pct": SHARE_CPU_PCT,
-                "share_ram_mb": SHARE_RAM_MB,
+                "share_cpu_pct": dyn_cpu,
+                "share_ram_mb": dyn_ram,
                 "applied_mode": current_mode,
             }
             resp = send_heartbeat(payload)
